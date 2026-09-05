@@ -1,169 +1,200 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
+import requests
 
-st.set_page_config(page_title="Markets Quantitative Assistant", layout="wide")
-st.title("📈 Quantitative Trading Assistant (INR ₹)")
+st.set_page_config(page_title="Trade Assistant", layout="centered", initial_sidebar_state="collapsed")
+
+st.markdown("""
+<style>
+    #MainMenu, header, footer {visibility: hidden;}
+    .block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
+    
+    .trade-card {
+        background: #161b22;
+        border-radius: 16px;
+        padding: 24px 20px;
+        border: 1px solid #30363d;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        margin-top: 10px;
+    }
+    .badge-bull {
+        display: inline-block;
+        background: rgba(35, 134, 54, 0.2);
+        color: #3fb950;
+        border: 1px solid #238636;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-weight: 700;
+        font-size: 14px;
+    }
+    .badge-bear {
+        display: inline-block;
+        background: rgba(218, 54, 51, 0.2);
+        color: #f85149;
+        border: 1px solid #da3633;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-weight: 700;
+        font-size: 14px;
+    }
+    .price-text {
+        font-size: 36px;
+        font-weight: 800;
+        letter-spacing: -1px;
+        margin: 12px 0 4px 0;
+        color: #f0f6fc;
+    }
+    .sub-rate {
+        color: #8b949e;
+        font-size: 13px;
+        margin-bottom: 20px;
+    }
+    .data-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        border-top: 1px solid #21262d;
+        padding-top: 16px;
+    }
+    .grid-box {
+        background: #0d1117;
+        padding: 12px;
+        border-radius: 10px;
+        text-align: center;
+        border: 1px solid #21262d;
+    }
+    .grid-label {
+        font-size: 11px;
+        color: #8b949e;
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+    .grid-value {
+        font-size: 16px;
+        font-weight: 700;
+        color: #f0f6fc;
+        margin-top: 2px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 INSTRUMENTS = {
-    "Crypto": {
-        "BITCOIN": "BTC-INR",
-        "ETHEREUM": "ETH-INR",
-        "SOLANA": "SOL-INR"
-    },
-    "Indices": {
-        "NIFTY 50": "^NSEI",
-        "BANK NIFTY": "^NSEBANK",
-        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
-        "MIDCAP NIFTY": "NIFTY_MIDCAP_100.NS",
-        "SENSEX": "^BSESN"
-    },
-    "Top Equities / F&O": {
-        "RELIANCE": "RELIANCE.NS",
-        "HDFC BANK": "HDFCBANK.NS",
-        "ICICI BANK": "ICICIBANK.NS",
-        "INFOSYS": "INFY.NS",
-        "TCS": "TCS.NS",
-        "STATE BANK OF INDIA": "SBIN.NS",
-        "TATA MOTORS": "TATAMOTORS.NS",
-        "ITC": "ITC.NS",
-        "BHARTI AIRTEL": "BHARTIARTL.NS",
-        "L&T": "LT.NS"
-    },
-    "Commodities (MCX/INR equivalent)": {
-        "GOLD (Continuous / converted to ₹)": "GC=F",
-        "SILVER (Continuous / converted to ₹)": "SI=F",
-        "CRUDE OIL (Continuous / converted to ₹)": "CL=F"
-    }
+    "⚡ Bitcoin (Delta India)": "DELTA_BTC",
+    "📊 NIFTY 50": "^NSEI",
+    "🏦 BANK NIFTY": "^NSEBANK",
+    "📈 FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    "🏢 SENSEX": "^BSESN",
+    "🔹 Reliance": "RELIANCE.NS",
+    "🔹 HDFC Bank": "HDFCBANK.NS"
 }
 
-st.sidebar.header("Market Selection")
-category = st.sidebar.selectbox("Category", list(INSTRUMENTS.keys()))
-selected_name = st.sidebar.selectbox("Instrument", list(INSTRUMENTS[category].keys()))
-custom_ticker = st.sidebar.text_input("Or Custom Symbol (e.g. BTC-INR, TATASTEEL.NS)", "")
+selected_label = st.selectbox("Select Market", list(INSTRUMENTS.keys()), label_visibility="collapsed")
+ticker = INSTRUMENTS[selected_label]
 
-ticker = custom_ticker.strip().upper() if custom_ticker.strip() else INSTRUMENTS[category][selected_name]
-
-timeframe = st.sidebar.selectbox("Timeframe", ["5m", "15m", "1h", "1d"], index=1)
-period = "5d" if timeframe in ["5m", "15m"] else "1mo"
+@st.cache_data(ttl=10)
+def fetch_delta_btc():
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get("https://api.india.delta.exchange/v2/tickers/BTCUSD", headers=headers, timeout=3).json()
+        if r.get("success"):
+            return float(r["result"]["mark_price"]), float(r["result"]["close"])
+    except Exception:
+        pass
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=3).json()
+        val = float(r["bitcoin"]["usd"])
+        return val, val
+    except Exception:
+        return None, None
 
 @st.cache_data(ttl=300)
-def get_usd_inr_rate():
+def fetch_usd_inr():
     try:
-        usd_inr = yf.download("USDINR=X", period="1d", interval="5m", progress=False)
-        if not usd_inr.empty:
-            if isinstance(usd_inr.columns, pd.MultiIndex):
-                usd_inr.columns = usd_inr.columns.get_level_values(0)
-            return float(usd_inr['Close'].iloc[-1])
+        data = yf.download("USDINR=X", period="1d", interval="5m", progress=False)
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            return float(data['Close'].iloc[-1])
     except Exception:
         pass
     return 84.0
 
 @st.cache_data(ttl=60)
-def load_market_data(symbol, tf, prd):
-    df = yf.download(symbol, period=prd, interval=tf, progress=False)
+def fetch_nse_data(symbol):
+    df = yf.download(symbol, period="5d", interval="15m", progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
 
-with st.spinner(f"Fetching live data for {ticker}..."):
-    data = load_market_data(ticker, timeframe, period)
-
-if data.empty or len(data) < 15:
-    st.error(f"Unable to fetch data for {ticker}. Please check the symbol format.")
+if ticker == "DELTA_BTC":
+    mark_price, close_24h = fetch_delta_btc()
+    if mark_price is None:
+        st.warning("Reconnecting to Delta feed...")
+    else:
+        usd_inr = fetch_usd_inr()
+        price_inr = mark_price * usd_inr
+        is_bullish = mark_price >= close_24h
+        
+        badge = '<span class="badge-bull">🟢 BUY / CALL</span>' if is_bullish else '<span class="badge-bear">🔴 SELL / PUT</span>'
+        sl = price_inr * (0.985 if is_bullish else 1.015)
+        target = price_inr * (1.025 if is_bullish else 0.975)
+        
+        st.markdown(f"""
+        <div class="trade-card">
+            {badge}
+            <div class="price-text">₹{price_inr:,.2f}</div>
+            <div class="sub-rate">Delta Mark: ${mark_price:,.2f} · USD/INR: ₹{usd_inr:.2f}</div>
+            <div class="data-grid">
+                <div class="grid-box">
+                    <div class="grid-label">🛑 Stop Loss</div>
+                    <div class="grid-value">₹{sl:,.2f}</div>
+                </div>
+                <div class="grid-box">
+                    <div class="grid-label">🎯 Target</div>
+                    <div class="grid-value">₹{target:,.2f}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 else:
-    is_usd = ticker.endswith("=F") or ticker.endswith("-USD")
-    rate = get_usd_inr_rate() if is_usd else 1.0
-
-    ohlc_cols = ['Open', 'High', 'Low', 'Close']
-    for col in ohlc_cols:
-        data[col] = data[col] * rate
-
-    data['EMA20'] = data['Close'].ewm(span=20, adjust=False).mean()
-    data['EMA50'] = data['Close'].ewm(span=50, adjust=False).mean()
-
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / (loss.replace(0, np.nan))
-    data['RSI'] = 100 - (100 / (1 + rs))
-
-    latest = data.iloc[-1]
-    prev = data.iloc[-2]
-    curr_price = float(latest['Close'])
-    prev_price = float(prev['Close'])
-    curr_rsi = float(latest['RSI'])
-    ema20 = float(latest['EMA20'])
-    ema50 = float(latest['EMA50'])
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("LTP", f"₹{curr_price:,.2f}", f"₹{curr_price - prev_price:,.2f}")
-    c2.metric("RSI (14)", f"{curr_rsi:.2f}")
-    c3.metric("EMA 20", f"₹{ema20:,.2f}")
-    c4.metric("EMA 50", f"₹{ema50:,.2f}")
-
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data['Open'], high=data['High'],
-        low=data['Low'], close=data['Close'],
-        name="OHLC (₹)"
-    ))
-    fig.add_trace(go.Scatter(x=data.index, y=data['EMA20'], line=dict(color='#ff9900', width=1.5), name="EMA 20"))
-    fig.add_trace(go.Scatter(x=data.index, y=data['EMA50'], line=dict(color='#0066ff', width=1.5), name="EMA 50"))
-    fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(l=10, r=10, t=25, b=10))
-    st.plotly_chart(fig, width='stretch')
-
-    st.subheader("⚡ Automated Quantitative Breakdown (All figures in ₹)")
-
-    if curr_price > ema20 > ema50:
-        trend = "Strong Bullish"
-        trend_color = "green"
-    elif curr_price < ema20 < ema50:
-        trend = "Strong Bearish"
-        trend_color = "red"
-    elif curr_price > ema20:
-        trend = "Mild Bullish / Pullback"
-        trend_color = "blue"
+    df = fetch_nse_data(ticker)
+    if df.empty or len(df) < 15:
+        st.warning("Market feed currently offline.")
     else:
-        trend = "Mild Bearish / Consolidating"
-        trend_color = "orange"
+        df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+        curr_price = float(df['Close'].iloc[-1])
+        ema20 = float(df['EMA20'].iloc[-1])
+        recent_low = float(df['Low'].tail(15).min())
+        recent_high = float(df['High'].tail(15).max())
+        
+        is_bullish = curr_price > ema20
+        badge = '<span class="badge-bull">🟢 BUY / CALL</span>' if is_bullish else '<span class="badge-bear">🔴 SELL / PUT</span>'
+        
+        if is_bullish:
+            sl = min(ema20, recent_low)
+            risk = max(curr_price - sl, 10)
+            target = curr_price + (risk * 1.5)
+        else:
+            sl = max(ema20, recent_high)
+            risk = max(sl - curr_price, 10)
+            target = curr_price - (risk * 1.5)
 
-    if curr_rsi > 70:
-        momentum = "Overbought zone (Risk of exhaustion/pullback)"
-    elif curr_rsi < 30:
-        momentum = "Oversold zone (Potential bounce territory)"
-    elif curr_rsi >= 50:
-        momentum = "Bullish momentum (> 50)"
-    else:
-        momentum = "Bearish momentum (< 50)"
-
-    recent_low = float(data['Low'].tail(20).min())
-    recent_high = float(data['High'].tail(20).max())
-
-    st.markdown(f"**Market Bias:** :{trend_color}[**{trend}**]")
-    st.markdown(f"**Momentum:** {momentum}")
-    st.markdown(f"**Immediate Support (S1):** `₹{recent_low:,.2f}` | **Immediate Resistance (R1):** `₹{recent_high:,.2f}`")
-
-    if "Bullish" in trend:
-        entry = curr_price
-        sl = round(min(ema20, recent_low), 2)
-        risk = entry - sl
-        target = round(entry + (risk * 1.8), 2)
-        setup_type = "LONG Setup"
-    else:
-        entry = curr_price
-        sl = round(max(ema20, recent_high), 2)
-        risk = sl - entry
-        target = round(entry - (risk * 1.8), 2)
-        setup_type = "SHORT Setup"
-
-    st.info(f"""
-    **{setup_type}:**
-    * **Suggested Entry Zone:** around `₹{entry:,.2f}`
-    * **Calculated Invalidation (Stop Loss):** `₹{sl:,.2f}`
-    * **1:1.8 Target:** `₹{target:,.2f}`
-    """)
-  
+        st.markdown(f"""
+        <div class="trade-card">
+            {badge}
+            <div class="price-text">₹{curr_price:,.2f}</div>
+            <div class="sub-rate">{selected_label} · 15m Trend Structure</div>
+            <div class="data-grid">
+                <div class="grid-box">
+                    <div class="grid-label">🛑 Stop Loss</div>
+                    <div class="grid-value">₹{sl:,.2f}</div>
+                </div>
+                <div class="grid-box">
+                    <div class="grid-label">🎯 Target</div>
+                    <div class="grid-value">₹{target:,.2f}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
